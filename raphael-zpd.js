@@ -273,7 +273,7 @@ RaphaelZPD = function(raphaelPaper, o) {
 
 		var g = svgDoc.getElementById("viewport"+me.id);
 
-		if (evt.target.tagName == "svg" || !me.opts.drag) {
+		if (evt.target.tagName == "svg" || !me.opts.drag || (me.opts.drag && evt.target.draggable == false)) {
 			// Pan mode
 			if (!me.opts.pan) return;
 
