@@ -517,7 +517,23 @@ RaphaelZPD = function(raphaelPaper, o) {
 		return me;   
 	}
 
+	/**
+	 * Zoom programmatically
+	 */
+	me.zoomBy = function(z) {
+		var me = this;
+		if (!me.opts.zoom) return;
 
+		//var svgDoc = evt.target.ownerDocument;
+		var svgDoc = document.getElementsByTagName("svg")[0];
+		if (!svgDoc.createSVGPoint) alert("no svg"); 
+
+		var g = svgDoc.getElementById("viewport"+me.id);
+
+		// Compute new scale matrix in current mouse position
+		var k = me.root.createSVGMatrix().scale(z);
+		me.setCTM(g, g.getCTM().multiply(k));
+	}
     // end of constructor
   	me.setupHandlers(me.root);
 	me.initialized = true;
