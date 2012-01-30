@@ -50,7 +50,7 @@ RaphaelZPD = function(raphaelPaper, o) {
 	me.initialized = false;
 	me.opts = { 
 		zoom: true, pan: true, drag: true, // Enable/disable core functionalities.
-		zoomThreshold: null, // Zoom [out, in] boundaries. E.g [-100, 10].
+		zoomThreshold: null // Zoom [out, in] boundaries by ratio. E.g [0.1, 2] means they can shrink to 10% of size, or increase to 200%.
 	};
 
     me.id   = ++raphaelZPDId;
@@ -116,7 +116,6 @@ RaphaelZPD = function(raphaelPaper, o) {
     me.stateTarget = null;
     me.stateOrigin = null;
     me.stateTf = null;
-    me.zoomCurrent = 0;
 
     if (o) {
 		for (key in o) {
@@ -144,6 +143,7 @@ RaphaelZPD = function(raphaelPaper, o) {
 		
 
 		//me.root.onmouseout = me.handleMouseUp; // Decomment me to stop the pan functionality when dragging out of the SVG element
+		// The above messes with pan if you are on top of an svg element
 
 		if (navigator.userAgent.toLowerCase().indexOf('webkit') >= 0)
 			me.root.addEventListener('mousewheel', me.handleMouseWheel, false); // Chrome/Safari
@@ -171,7 +171,7 @@ RaphaelZPD = function(raphaelPaper, o) {
 
 		element.setAttribute("transform", s);
 	};
-
+	
 	/**
 	 * Dumps a matrix to a string (useful for debug).
 	 */
@@ -188,11 +188,25 @@ RaphaelZPD = function(raphaelPaper, o) {
 		for (i in attributes)
 			element.setAttributeNS(null, i, attributes[i]);
 	};
+	
+	var getKeys = function(obj){
+   var keys = [];
+   for(var key in obj){
+      keys.push(key);
+   }
+   return keys;
+}
 
-	/**
+
+/**
 	 * Handle touch start event.
 	 */
+	 
 	me.handleTouchStart = function(evt) {
+	//	if (evt.preventDefault)
+	//		evt.preventDefault();
+
+		//evt.returnValue = false;
 
 		var svgDoc = evt.target.ownerDocument;
 
@@ -245,38 +259,81 @@ RaphaelZPD = function(raphaelPaper, o) {
 	 * Handle touch move event.
 	 */
 	me.handleTouchMove = function(evt) {
-		
-		// Prevent iOS scrolling
+	
 		if (evt.preventDefault)
 			evt.preventDefault();
+
 		evt.returnValue = false;
 
 		var svgDoc = evt.target.ownerDocument;
 
 		var g = svgDoc.getElementById("viewport"+me.id);
+		
+		var p = {};
+		p.x = evt.pageX;
+		p.y = evt.pageY;
+		
+		var delta = {};
+		
+		delta.x = p.x - me.stateOrigin.x;
+		delta.y = p.y - me.stateOrigin.y;
 
 		if (me.state == 'pan') {
 			// Pan mode
 			if (!me.opts.pan) return;
 
-			var p = {};
-			p.x = evt.pageX;
-			p.y = evt.pageY;
-
-			me.setCTM(g, me.stateTf.inverse().translate(p.x - me.stateOrigin.x, p.y - me.stateOrigin.y));
+			// Slow down the panning when zoomed in, speed it up when zoomed out
+			var svgDoc = evt.target.ownerDocument;
+			var g = svgDoc.getElementById("viewport"+me.id);
+			var gTransform = g.getCTM();
+//			var currentScale = gTransform.a;
+var currentScale = gTransform.a;
+			
+			delta.x /= currentScale;
+			delta.y /= currentScale;
+			
+			me.setCTM(g, me.stateTf.inverse().translate(delta.x, delta.y));
 		} else if (me.state == 'move') {
 			// Move mode
 			if (!me.opts.drag) return;
 
-			var p = {};
-			p.x = evt.pageX;
-			p.y = evt.pageY;
+			
 
-			me.setCTM(me.stateTarget, me.root.createSVGMatrix().translate(p.x - me.stateOrigin.x, p.y - me.stateOrigin.y).multiply(g.getCTM().inverse()).multiply(me.stateTarget.getCTM()));
+			me.setCTM(me.stateTarget, me.root.createSVGMatrix().translate(delta.x, delta.y).multiply(g.getCTM().inverse()).multiply(me.stateTarget.getCTM()));
 
 			me.stateOrigin = p;
 		}
 	};
+	
+	/**
+	 * Handle zooming from the two different events that try to zoom
+	 */
+	me.zoomWithDeltaAndPosOnSvgDoc = function(delta, p, svgDoc) {
+		var g = svgDoc.getElementById("viewport"+me.id);
+		var gTransform = g.getCTM();
+		
+		if (delta > 0) {
+            if (me.opts.zoomThreshold) 
+                if (me.opts.zoomThreshold[1] <= gTransform.a) return;
+        } else {
+            if (me.opts.zoomThreshold)
+                if (me.opts.zoomThreshold[0] >= gTransform.a) {
+                	// TODO: Hit minimum threshold, make it match
+	                return;
+                }
+        }
+        
+		var z = 1 + delta; // Zoom factor: 0.9/1.1
+		
+		// Compute new scale matrix in current mouse/gesture position
+		var k = me.root.createSVGMatrix().translate(p.x, p.y).scale(z).translate(-p.x, -p.y);
+		me.setCTM(g, gTransform.multiply(k));
+
+		if (!me.stateTf)
+			me.stateTf = g.getCTM().inverse();
+
+		me.stateTf = me.stateTf.multiply(k.inverse());
+	}
 
 	/**
 	 * Handle pinch/pan gestures on iOS Start
@@ -311,49 +368,24 @@ RaphaelZPD = function(raphaelPaper, o) {
 		var delta;
 
 		if (scaleDelta)
-			delta = scaleDelta; // WebKit
+			delta = scaleDelta / 10; // Chrome/Safari
 		else
-			delta = evt.detail / -90;
-
-
-        if (delta > 0) {
-            if (me.opts.zoomThreshold) 
-                if (me.opts.zoomThreshold[1] <= me.zoomCurrent) return;
-            me.zoomCurrent++;
-        } else {
-            if (me.opts.zoomThreshold)
-                if (me.opts.zoomThreshold[0] >= me.zoomCurrent) return;
-            me.zoomCurrent--;
-        }
-
-
-		var z = 1 + delta; // Zoom factor: 0.9/1.1
-
+			delta = evt.detail / -90; // Mozilla
+		
+		var p = {};
+		p.x = evt.pageX;
+		p.y = evt.pageY;
+		
 		var g = svgDoc.getElementById("viewport"+me.id);
-		
-		var p = me.getEventPoint(evt);
 
-		p = p.matrixTransform(g.getCTM().inverse());
-
-		// Compute new scale matrix in current touch position
-		var zoomOrigin = {};
-		zoomOrigin.x = evt.pageX;
-		zoomOrigin.y = evt.pageY;
-		
-		var k = me.root.createSVGMatrix().translate(zoomOrigin.x,zoomOrigin.y).scale(z).translate(-zoomOrigin.x,-zoomOrigin.y);
-		me.setCTM(g, g.getCTM().multiply(k));
-
-		if (!me.stateTf)
-			me.stateTf = g.getCTM().inverse();
-
-		me.stateTf = me.stateTf.multiply(k.inverse());
-		lastScale = evt.scale;
+		me.zoomWithDeltaAndPosOnSvgDoc(delta, p, svgDoc);
 	}
 
 	/**
 	 * Handle mouse move event.
 	 */
 	me.handleMouseWheel = function(evt) {
+
 		if (!me.opts.zoom) return;
 
 		if (evt.preventDefault)
@@ -370,32 +402,18 @@ RaphaelZPD = function(raphaelPaper, o) {
 		else
 			delta = evt.detail / -90; // Mozilla
 
-        if (delta > 0) {
-            if (me.opts.zoomThreshold) 
-                if (me.opts.zoomThreshold[1] <= me.zoomCurrent) return;
-            me.zoomCurrent++;
-        } else {
-            if (me.opts.zoomThreshold)
-                if (me.opts.zoomThreshold[0] >= me.zoomCurrent) return;
-            me.zoomCurrent--;
-        }
 
-		var z = 1 + delta; // Zoom factor: 0.9/1.1
-
-		var g = svgDoc.getElementById("viewport"+me.id);
+		if(delta==0) return;
+		else if(delta>0) delta = 0.1;
+		else delta = -0.1;
 		
 		var p = me.getEventPoint(evt);
+		
+		var g = svgDoc.getElementById("viewport"+me.id);
 
 		p = p.matrixTransform(g.getCTM().inverse());
-
-		// Compute new scale matrix in current mouse position
-		var k = me.root.createSVGMatrix().translate(p.x, p.y).scale(z).translate(-p.x, -p.y);
-		me.setCTM(g, g.getCTM().multiply(k));
-
-		if (!me.stateTf)
-			me.stateTf = g.getCTM().inverse();
-
-		me.stateTf = me.stateTf.multiply(k.inverse());
+		
+		me.zoomWithDeltaAndPosOnSvgDoc(delta, p, svgDoc);
 	};
 
 	/**
@@ -517,23 +535,7 @@ RaphaelZPD = function(raphaelPaper, o) {
 		return me;   
 	}
 
-	/**
-	 * Zoom programmatically
-	 */
-	me.zoomBy = function(z) {
-		var me = this;
-		if (!me.opts.zoom) return;
 
-		//var svgDoc = evt.target.ownerDocument;
-		var svgDoc = document.getElementsByTagName("svg")[0];
-		if (!svgDoc.createSVGPoint) alert("no svg"); 
-
-		var g = svgDoc.getElementById("viewport"+me.id);
-
-		// Compute new scale matrix in current mouse position
-		var k = me.root.createSVGMatrix().scale(z);
-		me.setCTM(g, g.getCTM().multiply(k));
-	}
     // end of constructor
   	me.setupHandlers(me.root);
 	me.initialized = true;
