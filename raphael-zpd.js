@@ -410,6 +410,12 @@ var currentScale = gTransform.a;
 		var p = me.getEventPoint(evt);
 		
 		var g = svgDoc.getElementById("viewport"+me.id);
+		
+		if( g == null ) { // if the paper.clear() was called and zpd was re-created, remove previous listener
+			me.root.removeEventListener('mousewheel', me.handleMouseWheel, false);
+			me.root.removeEventListener('DOMMouseScroll', me.handleMouseWheel, false);
+			return;
+		}
 
 		p = p.matrixTransform(g.getCTM().inverse());
 		
